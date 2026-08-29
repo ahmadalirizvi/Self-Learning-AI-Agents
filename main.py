@@ -6,59 +6,73 @@ import sys
 
 load_dotenv()
 
-config = {
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {"host": "localhost", "port": 6333},
-    },
-}
-
-# Initialize Gemini (GenAI) client using an API key from environment or .env
-api_key = os.getenv("API_KEY") or os.getenv("API_KEY")
+# Gemini API key
+api_key = os.getenv("API_KEY")
 if not api_key:
-    print(
-        "No Gemini API key found. Set GENAI_API_KEY in your environment or .env."
-    )
-    print(
-        "See https://ai.google.dev/gemini-api/docs/api-key for how to create an API key."
-    )
+    print("No Gemini API key found. Set GEMINI_API_KEY in your .env file.")
+    print("See https://ai.google.dev/gemini-api/docs/api-key for how to create one.")
     sys.exit(1)
 
 client = genai.Client(api_key=api_key)
 
-interaction = client.interactions.create(
-    model="gemini-3.7-flash",
-    input="You are a helpful AI. Answer the question based on query and memories.\nUser Memories:"
-)
+# mem0 config: Qdrant for storage, Gemini for both the LLM and the embedder
+config = {
+    "vector_store": {
+        "provider": "qdrant",
+        "config": {
+            "host": "localhost",
+            "port": 6333,
+            "embedding_model_dims": 768,
+        },
+    },
+    "llm": {
+        "provider": "gemini",
+        "config": {"api_key": api_key, "model": "gemini-3.6-flash"},
+    },
+    "embedder": {
+        "provider": "gemini",
+        "config": {"api_key": api_key, "model": "gemini-embedding-001"},
+    },
+}
 
 memory = Memory.from_config(config)
 
 
 def chat_with_memories(message: str, user_id: str = "default_user") -> str:
+    print("[debug] starting memory.search()...", flush=True)
     # Retrieve relevant memories
-    relevant_memories = memory.search(
-        query=message, filters={"user_id": user_id}, limit=3
-    )
+    relevant_memories = memory.search(query=message, user_id=user_id, limit=3)
+    print("[debug] memory.search() finished", flush=True)
     memories_str = "\n".join(
         f"- {entry['memory']}" for entry in relevant_memories["results"]
     )
-    print(memories_str)
+    if memories_str:
+        print("Relevant memories:\n" + memories_str)
 
-    # Generate Assistant response
-    system_prompt = f"You are a helpful AI. Answer the question based on query and memories.\nUser Memories:\n{memories_str}"
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": message},
-    ]
-    response = client.chat.completions.create(
-        model="gpt-4o-mini", messages=messages
+    # Build the prompt for Gemini
+    system_prompt = (
+        "You are a helpful AI. Answer the question based on the query and memories.\n"
+        f"User Memories:\n{memories_str}"
     )
-    assistant_response = response.choices[0].message.content
+    full_prompt = f"{system_prompt}\n\nUser: {message}"
 
-    # Create new memories from the conversation
-    messages.append({"role": "assistant", "content": assistant_response})
-    # This is where the magic happens
-    memory.add(messages, user_id=user_id, metadata={"source": "demo"})
+    print("[debug] starting generate_content()...", flush=True)
+    # Generate response using Gemini
+    response = client.models.generate_content(
+        model="gemini-3.7-flash",
+        contents=full_prompt,
+    )
+    print("[debug] generate_content() finished", flush=True)
+    assistant_response = response.text
+
+    # Store the exchange as new memory
+    conversation = [
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": assistant_response},
+    ]
+    print("[debug] starting memory.add()...", flush=True)
+    memory.add(conversation, user_id=user_id, metadata={"source": "demo"})
+    print("[debug] memory.add() finished", flush=True)
 
     return assistant_response
 
