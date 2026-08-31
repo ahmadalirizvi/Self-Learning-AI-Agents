@@ -3,6 +3,7 @@ from mem0 import Memory
 from dotenv import load_dotenv
 import os
 import sys
+from pathlib import Path
 
 load_dotenv()
 
@@ -50,9 +51,12 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
         print("Relevant memories:\n" + memories_str)
 
     # Build the prompt for Gemini
-    system_prompt = (
-        "You are a AI for day to day tasks. Answer the question based on the query and memories.\n"
-        f"User Memories:\n{memories_str}"
+    SYSTEM_PROMPT = Path("prompts/system_prompt.txt").read_text(
+    encoding="utf-8"
+    )
+
+    system_prompt = SYSTEM_PROMPT.format(
+        memories=memories
     )
     full_prompt = f"{system_prompt}\n\nUser: {message}"
 
